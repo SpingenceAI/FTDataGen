@@ -1,0 +1,12 @@
+litellm
+sentence-transformers
+
+tqdm
+pydantic
+loguru
+python-dotenv
+PyPDF2
+python-docx
+python-pptx
+bs4
+markdownify
