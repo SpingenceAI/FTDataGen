@@ -27,6 +27,7 @@ from file_parser import parse_file
 
 
 class LLMConfig(BaseModel):
+    """LLM config"""
     model: str
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -236,11 +237,17 @@ def main(args):
     if not os.path.exists(args.input_file):
         raise FileNotFoundError(f"The file {args.input_file} does not exist")
 
+    # load env
+    LLM_MODEL = os.getenv("LLM_MODEL")
+    if LLM_MODEL == "":
+        raise ValueError("LLM_MODEL is not set")
+    LLM_BASE_URL = os.getenv("LLM_BASE_URL")
+    if LLM_BASE_URL == "":
+        LLM_BASE_URL = None
     # set llm config
     llm_config = LLMConfig(
-        model=os.getenv("LLM_MODEL"),
-        base_url=os.getenv("LLM_BASE_URL"),
-        api_key=os.getenv("LLM_API_KEY"),
+        model=LLM_MODEL,
+        base_url=LLM_BASE_URL,
         temperature=float(os.getenv("LLM_TEMPERATURE", 0.5)),
         max_tokens=int(os.getenv("LLM_MAX_TOKENS", 4096)),
     )
