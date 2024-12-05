@@ -1,0 +1,5 @@
+FROM nvcr.io/nvidia/pytorch:24.11-py3
+WORKDIR /workspace
+ADD requirements.txt /workspace/requirements.txt
+RUN pip install -r /workspace/requirements.txt
+
