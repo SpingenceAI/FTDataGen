@@ -23,6 +23,37 @@ Follow the format below in JSON format, key is "questions", value is a list of q
     ]
 }}
 """
+GENERATE_QUESTION_SYSTEM_PROMPT = """
+You are a teacher, you need to generate questions for your students based on the given context.
+Help user to generate questions based on the context user provided, and DO NOT generate same questions.
+Questions should be diverse and cover different aspects of the context.
+DO NOT GENERATE SAME QUESTIONS AS PREVIOUS QUESTIONS (in <previous_questions> section).
+USE THE SAME LANGUAGE AS THE CONTEXT.
+
+"""
+
+GENERATE_QUESTION_PROMPT_V2 = """
+
+Previous questions are:
+<previous_questions>
+{previous_questions}
+</previous_questions>
+The context is:
+<context>
+{context}
+</context>
+Please generate {target_num} questions based on the context user provided, and DO NOT generate same questions.
+DO NOT GENERATE SAME QUESTIONS AS PREVIOUS QUESTIONS (in <previous_questions> section).
+Generate questions in the same language as the context.
+Response in JSON format, key is "questions", value is a list of questions(string):
+{{
+    "questions": [
+        "question1",
+        "question2",
+        ...
+    ]
+}}
+"""
 
 
 ANSWER_QUESTION_PROMPT = """

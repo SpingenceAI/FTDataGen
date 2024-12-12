@@ -28,6 +28,7 @@ from file_parser import parse_file
 
 class LLMConfig(BaseModel):
     """LLM config"""
+
     model: str
     api_key: Optional[str] = None
     base_url: Optional[str] = None
@@ -83,7 +84,7 @@ def filter_questions(
     questions = semantic_filter.filter(questions, thredshold)
     num_after_filter = len(questions)
     logger.info(
-        f"Filtered {num_before_filter - num_after_filter} questions, {num_after_filter} questions left"
+        f"Filtered {num_before_filter - num_after_filter} questions, {num_after_filter} questions remain"
     )
     return questions
 
@@ -100,18 +101,24 @@ def generate_questions(
         questions: List[str]
 
     question_list = []
+    messages = [
+        {
+            "role": "system",
+            "content": prompts.GENERATE_QUESTION_SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": prompts.GENERATE_QUESTION_PROMPT_V2.format(
+                context=context,
+                previous_questions="\n".join(history_questions),
+                target_num=batch_num,
+            ),
+        },
+    ]
+    # logger.debug(f"Generate questions messages: {messages}")
     questions: Questions = chat(
         llm_config,
-        [
-            {
-                "role": "user",
-                "content": prompts.GENERATE_QUESTION_PROMPT.format(
-                    context=context,
-                    avoid_duplicate="\n".join(history_questions),
-                    target_num=batch_num,
-                ),
-            }
-        ],
+        messages,
         response_format=Questions,
         retry=3,
     )
@@ -135,16 +142,17 @@ def generate_answer(llm_config: LLMConfig, question: str, context: str) -> str:
     class Answer(BaseModel):
         answer: str
 
+    messages = [
+        {
+            "role": "user",
+            "content": prompts.ANSWER_QUESTION_PROMPT.format(
+                context=context, question=question
+            ),
+        }
+    ]
     answer: Answer = chat(
         llm_config,
-        [
-            {
-                "role": "user",
-                "content": prompts.ANSWER_QUESTION_PROMPT.format(
-                    context=context, question=question
-                ),
-            }
-        ],
+        messages,
         response_format=Answer,
         retry=3,
     )
@@ -190,7 +198,9 @@ def load_qa_pairs(file_path: str) -> List[QAPair]:
     return [QAPair(**json.loads(line)) for line in load_lines(file_path)]
 
 
-def split_context(context: str, chunk_size: Optional[int] = None) -> List[str]:
+def split_context(
+    context: str, chunk_size: Optional[int] = None, overlap: Optional[int] = None
+) -> List[str]:
     """Split context into chunks"""
     context = context.strip()
     if chunk_size is None or chunk_size == -1 or chunk_size < 100:
@@ -198,7 +208,10 @@ def split_context(context: str, chunk_size: Optional[int] = None) -> List[str]:
             "Chunk size is not provided, return the whole context as one chunk, might cuase llm OOM"
         )
         return [context]
-    return [context[i : i + chunk_size] for i in range(0, len(context), chunk_size)]
+    chunks = []
+    for i in range(0, len(context), chunk_size - overlap):
+        chunks.append(context[i : i + chunk_size])
+    return chunks
 
 
 def save_lines(lines: List[str], file_path: str):
@@ -226,6 +239,14 @@ def merge_qa_pairs(
 
 
 def main(args):
+    # default variables
+    DEFAULT_CONTEXT_CHUNK_SIZE = 1024
+    DEFAULT_OVERLAP_CHUNK_SIZE = 200
+    DEFAULT_MIN_CONTEXT_CHUNK_SIZE = 512
+    DEFAULT_GENERATE_QUESTIONS_BATCH_NUM = 3
+    DEFAULT_LLM_TEMPERATURE = 0.5
+    DEFAULT_LLM_MAX_TOKENS = 4096
+
     # load environment variables
     env_path = args.env_path
     load_dotenv(env_path)
@@ -248,8 +269,8 @@ def main(args):
     llm_config = LLMConfig(
         model=LLM_MODEL,
         base_url=LLM_BASE_URL,
-        temperature=float(os.getenv("LLM_TEMPERATURE", 0.5)),
-        max_tokens=int(os.getenv("LLM_MAX_TOKENS", 4096)),
+        temperature=float(os.getenv("LLM_TEMPERATURE", DEFAULT_LLM_TEMPERATURE)),
+        max_tokens=int(os.getenv("LLM_MAX_TOKENS", DEFAULT_LLM_MAX_TOKENS)),
     )
 
     try:
@@ -266,27 +287,35 @@ def main(args):
         logger.error(f"Failed to initialize SemanticFilter: {e}")
         semantic_filter = None
 
-    GENERATE_QUESTIONS_BATCH_NUM = int(os.getenv("GENERATE_QUESTIONS_BATCH_NUM", 10))
+    GENERATE_QUESTIONS_BATCH_NUM = int(
+        os.getenv("GENERATE_QUESTIONS_BATCH_NUM", DEFAULT_GENERATE_QUESTIONS_BATCH_NUM)
+    )
 
     logger.info(f"Step 1: Parsing file {args.input_file}")
     context = parse_file(args.input_file)
     logger.debug(f"Parsed context: {context}")
+    OVERLAP_CHUNK_SIZE = int(
+        os.getenv("OVERLAP_CHUNK_SIZE", DEFAULT_OVERLAP_CHUNK_SIZE)
+    )
 
-    MIN_CONTEXT_CHUNK_SIZE = 2000
     # Split context into chunks
-    CONTEXT_CHUNK_SIZE = int(os.getenv("CONTEXT_CHUNK_SIZE", MIN_CONTEXT_CHUNK_SIZE))
+    CONTEXT_CHUNK_SIZE = int(
+        os.getenv("CONTEXT_CHUNK_SIZE", DEFAULT_CONTEXT_CHUNK_SIZE)
+    )
     if CONTEXT_CHUNK_SIZE == -1:
         logger.warning("Context chunk size is -1, disable chunking")
         CONTEXT_CHUNK_SIZE = None
-    elif CONTEXT_CHUNK_SIZE < MIN_CONTEXT_CHUNK_SIZE:
+    elif CONTEXT_CHUNK_SIZE < DEFAULT_MIN_CONTEXT_CHUNK_SIZE:
         logger.warning(
-            f"Context chunk size is too small, set to {MIN_CONTEXT_CHUNK_SIZE}, got {CONTEXT_CHUNK_SIZE}"
+            f"Context chunk size is too small, set to {DEFAULT_MIN_CONTEXT_CHUNK_SIZE}, got {CONTEXT_CHUNK_SIZE}"
         )
-        CONTEXT_CHUNK_SIZE = MIN_CONTEXT_CHUNK_SIZE
+        CONTEXT_CHUNK_SIZE = DEFAULT_MIN_CONTEXT_CHUNK_SIZE
 
-    context_chunks = split_context(context, chunk_size=CONTEXT_CHUNK_SIZE)
+    context_chunks = split_context(
+        context, chunk_size=CONTEXT_CHUNK_SIZE, overlap=OVERLAP_CHUNK_SIZE
+    )
     chunk_num = len(context_chunks)
-    each_chunk_qa_num = args.qa_num // chunk_num
+    each_chunk_qa_num = max(args.qa_num // chunk_num, 1)
     qa_pairs = []  # all chunks qa pairs
     logger.info(
         f"Step 2: Generating questions and answers chunk by chunk, chunk_size:{chunk_num}"
@@ -310,22 +339,35 @@ def main(args):
             )
         else:
             chunk_questions = []
+
+        question_generation_count = 0
         while len(chunk_questions) < each_chunk_qa_num:
-            # generate questions batch by batch
-            chunk_questions.extend(
-                generate_questions(
-                    llm_config,
-                    context_chunk,
-                    history_questions=chunk_questions,
-                    batch_num=GENERATE_QUESTIONS_BATCH_NUM,
+
+            # max 2 times of each_chunk_qa_num retries
+            if question_generation_count > (each_chunk_qa_num * 2):
+                logger.warning(
+                    f"Failed to generate questions after {question_generation_count} attempts, skip this chunk"
                 )
+                break
+            # generate questions batch by batch
+            generated_questions = generate_questions(
+                llm_config,
+                context_chunk,
+                history_questions=chunk_questions,
+                batch_num=min(GENERATE_QUESTIONS_BATCH_NUM, each_chunk_qa_num),
             )
+            logger.info(f"Generated {len(generated_questions)} questions")
+            chunk_questions.extend(generated_questions)
+
             # filter questions
             chunk_questions = filter_questions(chunk_questions, semantic_filter)
+            logger.debug(f"Filtered questions: {chunk_questions}")
             save_lines(chunk_questions, chunk_questions_path)
-
+            question_generation_count += 1
         # format qa pairs from questions
-        chunk_qa_pairs = [QAPair(question=x) for x in chunk_questions]
+        chunk_qa_pairs = [
+            QAPair(question=x) for x in chunk_questions[:each_chunk_qa_num]
+        ]
 
         # load qa pairs from file
         chunk_qa_pairs_path = os.path.join(OUTPUT_FOLDER, f"chunk_{i}_qa_pairs.jsonl")

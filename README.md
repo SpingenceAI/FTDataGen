@@ -9,8 +9,8 @@ Use LLM to generate training data for fine-tuning LLM
 
 ### output data format: jsonl 
 ```txt
-{"instruction": "instruction", "input": "input", "output": "output"}
-{"instruction": "instruction", "input": "input", "output": "output"}
+{"instruction": "instruction", "output": "output"}
+{"instruction": "instruction", "output": "output"}
 ```
 
 ## Get Started
